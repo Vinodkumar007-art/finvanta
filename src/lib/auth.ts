@@ -1,11 +1,29 @@
 import crypto from "node:crypto";
 import { cookies, headers } from "next/headers";
+import type { NextResponse } from "next/server";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { sessions, users } from "@/db/schema";
 
 export const SESSION_COOKIE = "fv_session";
 const SESSION_DAYS = 14;
+const SESSION_MAX_AGE = SESSION_DAYS * 24 * 60 * 60;
+
+export function sessionCookieOptions(
+  expiresAt: Date,
+  nodeEnv = process.env.NODE_ENV,
+  forwardedProto: string | null = null,
+) {
+  const forwardedScheme = forwardedProto?.split(",")[0]?.trim().toLowerCase();
+  return {
+    httpOnly: true,
+    sameSite: "lax" as const,
+    secure: nodeEnv === "production" || forwardedScheme === "https",
+    path: "/",
+    expires: expiresAt,
+    maxAge: SESSION_MAX_AGE,
+  };
+}
 
 export function hashPassword(pw: string) {
   const salt = crypto.randomBytes(16);
@@ -21,20 +39,35 @@ export function verifyPassword(pw: string, stored: string) {
 }
 export const sha256 = (s: string | Buffer) => crypto.createHash("sha256").update(s).digest("hex");
 
-export async function createSession(userId: string) {
+export async function createSession(userId: string, response?: NextResponse) {
   const token = crypto.randomBytes(32).toString("hex");
+  const jar = await cookies();
   const h = await headers();
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 86400000);
-  await db.insert(sessions).values({ id: sha256(token), userId, expiresAt, userAgent: (h.get("user-agent") ?? "").slice(0, 200) });
-  const secure = h.get("x-forwarded-proto") === "https";
-  (await cookies()).set(SESSION_COOKIE, token, { httpOnly: true, sameSite: "lax", secure, path: "/", expires: expiresAt });
+  const previousToken = jar.get(SESSION_COOKIE)?.value;
+  await db.transaction(async (tx) => {
+    if (previousToken) await tx.delete(sessions).where(eq(sessions.id, sha256(previousToken)));
+    await tx.insert(sessions).values({
+      id: sha256(token),
+      userId,
+      expiresAt,
+      userAgent: (h.get("user-agent") ?? "").slice(0, 200),
+    });
+  });
+  const options = sessionCookieOptions(expiresAt, process.env.NODE_ENV, h.get("x-forwarded-proto"));
+  if (response) response.cookies.set(SESSION_COOKIE, token, options);
+  else jar.set(SESSION_COOKIE, token, options);
 }
 
 export async function destroySession() {
   const jar = await cookies();
   const t = jar.get(SESSION_COOKIE)?.value;
   if (t) await db.delete(sessions).where(eq(sessions.id, sha256(t)));
-  jar.delete(SESSION_COOKIE);
+  const h = await headers();
+  jar.set(SESSION_COOKIE, "", {
+    ...sessionCookieOptions(new Date(0), process.env.NODE_ENV, h.get("x-forwarded-proto")),
+    maxAge: 0,
+  });
 }
 
 export async function sessionUser() {

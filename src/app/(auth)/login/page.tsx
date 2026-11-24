@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { LoginForm } from "@/components/AuthForms";
+import { OAuthButtons } from "@/components/OAuthButtons";
 import { getCtx } from "@/lib/ctx";
 
 export const metadata = {
@@ -22,8 +23,6 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ r
     oauth_error: "Social sign-in could not be completed. Please try again.",
   };
   const oauthError = sp.error ? oauthErrors[sp.error] ?? oauthErrors.oauth_error : null;
-  const googleReady = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.OAUTH_TOKEN_ENCRYPTION_KEY);
-  const githubReady = Boolean(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET && process.env.OAUTH_TOKEN_ENCRYPTION_KEY);
   return (
     <div className="fade-up">
       <div className="mb-6">
@@ -34,15 +33,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ r
       <div className="rounded-2xl border border-line bg-panel p-5 shadow-2xl shadow-black/10 sm:p-6">
         {oauthError && <p role="alert" className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">{oauthError}</p>}
         <LoginForm reset={!!sp.reset} />
-        {(googleReady || githubReady) && (
-          <div className="mt-5 border-t border-line pt-4">
-            <p className="mb-3 text-center text-xs text-muted">Or continue with</p>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {googleReady && <Link className="btn justify-center" href="/api/auth/oauth/google">Google</Link>}
-              {githubReady && <Link className="btn justify-center" href="/api/auth/oauth/github">GitHub</Link>}
-            </div>
-          </div>
-        )}
+        <OAuthButtons />
       </div>
       <div className="mt-4 rounded-xl border border-accent/20 bg-accent/5 p-3.5">
         <p className="text-xs font-semibold">Built for financial control</p>

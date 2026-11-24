@@ -6,6 +6,7 @@ import { db } from "@/db";
 import { memberships, oauthAccounts, oauthStates, organisations, userPreferences, users } from "@/db/schema";
 import { createSession } from "@/lib/auth";
 import { getCtx } from "@/lib/ctx";
+import { decodeOAuthEncryptionKey } from "@/lib/oauth-config";
 
 export type OAuthProvider = "google" | "github";
 
@@ -74,8 +75,8 @@ function callbackUrl(provider: OAuthProvider, request: Request): string {
 function encryptionKey(): Buffer {
   const value = process.env.OAUTH_TOKEN_ENCRYPTION_KEY?.trim();
   if (!value) throw new OAuthFlowError("provider_unavailable", "OAuth token encryption is not configured.");
-  const key = /^[\da-f]{64}$/i.test(value) ? Buffer.from(value, "hex") : Buffer.from(value, "base64");
-  if (key.length !== 32) throw new OAuthFlowError("provider_unavailable", "OAuth token encryption key must decode to 32 bytes.");
+  const key = decodeOAuthEncryptionKey(value);
+  if (!key) throw new OAuthFlowError("provider_unavailable", "OAuth token encryption key must decode to 32 bytes.");
   return key;
 }
 
@@ -179,6 +180,10 @@ function safeEqual(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
   return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+export function matchesOAuthState(state: string | null, stateCookie: string | null): boolean {
+  return Boolean(state && stateCookie && safeEqual(state, stateCookie));
 }
 
 async function exchangeCode(provider: OAuthProvider, code: string, verifier: string, request: Request): Promise<ProviderToken> {
@@ -440,13 +445,7 @@ export async function completeOAuth(
   const state = url.searchParams.get("state");
   const stateCookie = cookieValue(request, COOKIE_NAME(provider));
   const providerError = url.searchParams.get("error");
-  if (providerError) {
-    throw new OAuthFlowError(
-      providerError === "access_denied" ? "access_denied" : "provider_error",
-      providerError === "access_denied" ? "Sign-in was cancelled." : "The identity provider could not complete sign-in.",
-    );
-  }
-  if (!state || !stateCookie || !safeEqual(state, stateCookie)) {
+  if (!state || !stateCookie || !matchesOAuthState(state, stateCookie)) {
     throw new OAuthFlowError("invalid_state", "The OAuth state is missing or does not match.");
   }
   const now = new Date();
@@ -456,6 +455,13 @@ export async function completeOAuth(
     gt(oauthStates.expiresAt, now),
   )).returning();
   if (!flow) throw new OAuthFlowError("invalid_state", "The OAuth state is expired or has already been used.");
+
+  if (providerError) {
+    throw new OAuthFlowError(
+      providerError === "access_denied" ? "access_denied" : "provider_error",
+      providerError === "access_denied" ? "Sign-in was cancelled." : "The identity provider could not complete sign-in.",
+    );
+  }
 
   const code = url.searchParams.get("code");
   if (!code) throw new OAuthFlowError("provider_error", "The identity provider did not return an authorization code.");
@@ -506,14 +512,15 @@ export async function beginOAuthResponse(provider: OAuthProvider, request: Reque
 
 export async function finishOAuthResponse(provider: OAuthProvider, request: Request) {
   let response: NextResponse;
-  const signedIn = Boolean(await getCtx());
+  let signedIn = false;
   try {
+    signedIn = Boolean(await getCtx());
     const result = await completeOAuth(provider, request);
     if (result.requiresMfa) {
       response = NextResponse.redirect(new URL("/login?error=mfa_required", appOrigin(request)));
     } else {
-      await createSession(result.userId);
       response = NextResponse.redirect(new URL(result.isNewUser ? "/onboarding" : "/dashboard", appOrigin(request)));
+      await createSession(result.userId, response);
     }
   } catch (error) {
     const code = oauthErrorCode(error instanceof OAuthFlowError ? error.code : "");

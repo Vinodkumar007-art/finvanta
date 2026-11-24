@@ -6,7 +6,9 @@ import {
   createPkcePair,
   decryptOAuthSecret,
   encryptOAuthSecret,
+  matchesOAuthState,
 } from "../src/services/oauth";
+import { oauthProviderReadiness } from "../src/lib/oauth-config";
 
 const originalKey = process.env.OAUTH_TOKEN_ENCRYPTION_KEY;
 const originalAppUrl = process.env.APP_URL;
@@ -56,6 +58,13 @@ describe("OAuth security helpers", () => {
     })).toBe(false);
   });
 
+  it("requires a matching non-empty OAuth state and callback cookie", () => {
+    expect(matchesOAuthState("state-value", "state-value")).toBe(true);
+    expect(matchesOAuthState("state-value", "other-state")).toBe(false);
+    expect(matchesOAuthState("state-value", null)).toBe(false);
+    expect(matchesOAuthState(null, null)).toBe(false);
+  });
+
   it("requires a configured HTTPS origin for production OAuth", () => {
     vi.stubEnv("NODE_ENV", "production");
     delete process.env.APP_URL;
@@ -72,5 +81,30 @@ describe("OAuth security helpers", () => {
     expect(() => appOrigin(new Request("https://untrusted.example/auth"))).toThrow(
       "OAuth requires an HTTPS redirect URL in production.",
     );
+  });
+
+  it("does not mark Google sign-in ready without a valid token-encryption key", () => {
+    const result = oauthProviderReadiness("google", {
+      GOOGLE_CLIENT_ID: "client-id",
+      GOOGLE_CLIENT_SECRET: "client-secret",
+      NODE_ENV: "development",
+    });
+
+    expect(result.ready).toBe(false);
+    expect(result.hasCredentials).toBe(true);
+    expect(result.missing).toContain("OAUTH_TOKEN_ENCRYPTION_KEY");
+  });
+
+  it("requires a canonical HTTPS origin for production provider buttons", () => {
+    const common = {
+      GOOGLE_CLIENT_ID: "client-id",
+      GOOGLE_CLIENT_SECRET: "client-secret",
+      OAUTH_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("hex"),
+      NODE_ENV: "production",
+    };
+
+    expect(oauthProviderReadiness("google", common).missing).toContain("APP_URL or OAUTH_REDIRECT_BASE_URL");
+    expect(oauthProviderReadiness("google", { ...common, APP_URL: "https://finvanta.example" }).ready).toBe(true);
+    expect(oauthProviderReadiness("google", { ...common, APP_URL: "http://finvanta.example" }).ready).toBe(false);
   });
 });
