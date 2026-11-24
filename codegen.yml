@@ -1,0 +1,17 @@
+schema:
+  - src/server/graphql/schema.ts:
+      pluckConfig:
+        modules:
+          - name: graphql-tag
+generates:
+  src/generated/graphql.ts:
+    plugins:
+      - typescript
+      - typescript-resolvers
+    config:
+      contextType: ../server/graphql/context#GraphQLContext
+      enumsAsTypes: true
+      mappers:
+        User: ../server/graphql/context#UserRow
+        Post: ../server/graphql/context#PostRow
+        Comment: ../server/graphql/context#CommentRow

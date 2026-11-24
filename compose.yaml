@@ -1,0 +1,57 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    env_file:
+      - ${FINVANTA_ENV_FILE:-.env.local}
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+    ports:
+      - "3002:3000"
+    volumes:
+      - ./storage:/app/storage
+      - next-cache:/app/.next/cache
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  worker:
+    profiles:
+      - workers
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: processor
+    env_file:
+      - ${FINVANTA_ENV_FILE:-.env.local}
+    environment:
+      NODE_ENV: production
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  chat:
+    profiles:
+      - chat
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: processor
+    env_file:
+      - ${FINVANTA_ENV_FILE:-.env.local}
+    environment:
+      NODE_ENV: production
+      CHAT_PORT: 4001
+    ports:
+      - "4001:4001"
+    command: ["npm", "run", "chat:server"]
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  next-cache:
